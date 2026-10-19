@@ -1,0 +1,5 @@
+name = "Nasir"
+print(f"Hello {name}, Zip2Git editor se push hua!")
+
+for i in range(1, 4):
+    print("Test line", i)
