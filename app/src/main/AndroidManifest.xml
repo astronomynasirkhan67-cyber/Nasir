@@ -7,8 +7,8 @@
     <application
         android:allowBackup="true"
         android:label="NK Voice AI"
-        android:icon="@drawable/nk_lion_icon"
-        android:roundIcon="@drawable/nk_lion_icon"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:largeHeap="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
