@@ -47,7 +47,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         val loc = if (st.lang == "hi") Locale("hi", "IN") else Locale("en", "IN")
         val r = tts?.setLanguage(loc)
         if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
-            st.post { st.note = "This text-to-speech voice is unavailable. Install the selected language voice in your phone settings." }
+            st.post { st.note = "Install the selected text-to-speech voice in your phone settings." }
         }
     }
 
@@ -66,7 +66,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                 if (ModelStore.hasVosk(ctx, st.lang)) {
                     model = Model(ModelStore.voskDir(ctx, st.lang).absolutePath)
                 } else {
-                    st.post { st.note = "Vosk model not found. Download it in Setup." }
+                    st.post { st.note = "Speech model not found. Download it from Setup." }
                 }
             } catch (e: Throwable) {
                 st.post { st.note = "Vosk error: ${e.message}" }
@@ -83,7 +83,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                         ctx,
                         LlmInference.LlmInferenceOptions.builder()
                             .setModelPath(ModelStore.llmFile(ctx).absolutePath)
-                            .setMaxTokens(512)
+                            .setMaxTokens(256)
                             .build()
                     )
                 }
@@ -97,7 +97,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         if (speech != null) return
         val m = model
         if (m == null) {
-            st.note = "Vosk model is not loaded yet. Please wait or download it in Setup."
+            st.note = "The speech model is still loading. Please try again."
             return
         }
         try {
@@ -124,12 +124,24 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         val text = try { JSONObject(hypothesis).optString("text").trim() } catch (_: Throwable) { "" }
         if (text.isEmpty()) return
         stopListening()
-        st.messages.add(Msg(true, text))
+        st.post { st.messages.add(Msg(true, text)); respond(text) }
+    }
+
+    fun sendText(text: String) {
+        val clean = text.trim()
+        if (clean.isEmpty() || st.responding) return
+        stopListening()
+        st.post { st.messages.add(Msg(true, clean)); respond(clean) }
+    }
+
+    private fun respond(text: String) {
+        st.responding = true
         st.status = "Thinking…"
         io.execute {
             val reply = think(text)
             st.post {
                 st.messages.add(Msg(false, reply))
+                st.responding = false
                 speak(reply)
             }
         }
@@ -138,15 +150,15 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
     private fun think(text: String): String {
         val l = llm
         if (l == null) {
-            return if (st.lang == "hi") "Gemma model is missing. You said: $text" else "Gemma model is missing. You said: $text"
+            return "Gemma model is not installed yet. Please open Setup and install a compatible model."
         }
         val langName = if (st.lang == "hi") "Hindi" else "English"
-        val prompt = "<start_of_turn>user\nYou are a friendly voice assistant. " +
-            "Answer in $langName in 1 to 3 short sentences. $text<end_of_turn>\n<start_of_turn>model\n"
+        val prompt = "<start_of_turn>user\nYou are NK Voice AI, a helpful and careful assistant. " +
+            "Reply only in $langName. Answer clearly and concisely.\n$text<end_of_turn>\n<start_of_turn>model\n"
         return try {
             l.generateResponse(prompt).replace("<end_of_turn>", "").trim()
         } catch (e: Throwable) {
-            "Error: ${e.message}"
+            "I could not generate a reply. Please check the Gemma model file in Setup and try again."
         }
     }
 
@@ -161,7 +173,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
 
     override fun onPartialResult(hypothesis: String?) {}
     override fun onFinalResult(hypothesis: String?) {}
-    override fun onError(exception: Exception?) { st.note = "Error: ${exception?.message}" }
+    override fun onError(exception: Exception?) { st.post { st.note = "Speech recognition error: ${exception?.message ?: "Unknown error"}"; st.listening = false } }
     override fun onTimeout() {}
 
     fun release() {

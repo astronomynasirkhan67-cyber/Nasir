@@ -1,21 +1,23 @@
-# Offline Voice Chat
+# NK Voice AI
 
-An Android voice assistant built with Kotlin and Jetpack Compose.
+Android app built with Kotlin, Jetpack Compose, Vosk speech recognition, and MediaPipe LLM Inference.
 
 ## Features
-- English app interface.
-- English and Hindi speech-recognition language switch.
-- Vosk speech-to-text, on-device Gemma responses through MediaPipe LLM Inference, and Android text-to-speech.
-- Download Vosk models from the app's Setup screen.
-- A Gemma 3 1B Android `.task` model URL is prefilled in Setup. The model is approximately 555 MB and is downloaded separately; it is not included in the APK because it is too large.
-- Once both models are downloaded, core recognition and response generation can work offline.
+- English-first interface with English/Hindi speech-language selection
+- Text chat using the message box and **Send** button
+- Voice input using Vosk and optional spoken replies using Android Text-to-Speech
+- Lion-themed launcher icon
+- GitHub Actions workflow to build a debug APK
 
-## Build APK using GitHub Actions
-1. Upload/push the contents of this repository to a GitHub repository on the `main` or `master` branch.
-2. Open the **Actions** tab and run **Build APK**, or push a commit to trigger it.
-3. Download the `NKVoiceAI-APK` artifact from the completed workflow.
+## Build an APK on GitHub
+1. Upload/push all files in this project to your GitHub repository.
+2. Open **Actions** and run **Build APK** (or push to `main`/`master`).
+3. Download the `NKVoiceAI-APK` artifact after the workflow succeeds.
 
-## Model notes
-The prefilled Gemma URL points to a public Hugging Face mirror of a MediaPipe-compatible Gemma 3 1B `.task` model. Downloading may take time and requires several hundred MB of free storage. Gemma is subject to Google's Gemma Terms of Use: https://ai.google.dev/gemma/terms. Review and accept the applicable terms before using the model. The model is not embedded in this source ZIP or APK.
+## Models
+Vosk speech models are downloaded by the app from the official Vosk model host. Gemma is not bundled in the APK because it is large and must be a MediaPipe LLM Inference-compatible model file (typically `.task`). Open **Setup** to choose a compatible file or enter a direct download URL. A random Gemma `.bin` or a standard Hugging Face repository page URL may not be compatible; use a direct download URL for the exact supported MediaPipe model.
 
-If the prefilled model host changes or becomes unavailable, replace the URL with a valid direct download URL for an Android MediaPipe LLM Inference `.task` model. A regular Transformers checkpoint or GGUF file will not work with this app's current MediaPipe API.
+## Troubleshooting
+- If AI replies fail, open Setup and verify that the model is a compatible MediaPipe `.task` model and that the download completed fully.
+- The app returns a readable error for failed inference rather than continuing with a bad response.
+- The Android build itself must be verified by the GitHub Actions run; this environment does not have Gradle installed, so a local APK build was not run here.
