@@ -30,11 +30,11 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
             override fun onStart(utteranceId: String?) {}
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
-                st.post { st.status = "तैयार / Ready" }
+                st.post { st.status = "Ready" }
             }
             override fun onDone(utteranceId: String?) {
                 st.post {
-                    st.status = "तैयार / Ready"
+                    st.status = "Ready"
                     if (st.handsFree && !st.showSetup) startListening()
                 }
             }
@@ -47,7 +47,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         val loc = if (st.lang == "hi") Locale("hi", "IN") else Locale("en", "IN")
         val r = tts?.setLanguage(loc)
         if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
-            st.post { st.note = "फ़ोन की Settings में इस भाषा की voice install करो / Install this TTS voice in phone settings" }
+            st.post { st.note = "This text-to-speech voice is unavailable. Install the selected language voice in your phone settings." }
         }
     }
 
@@ -66,7 +66,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                 if (ModelStore.hasVosk(ctx, st.lang)) {
                     model = Model(ModelStore.voskDir(ctx, st.lang).absolutePath)
                 } else {
-                    st.post { st.note = "Vosk model नहीं मिला। Setup में download करो।" }
+                    st.post { st.note = "Vosk model not found. Download it in Setup." }
                 }
             } catch (e: Throwable) {
                 st.post { st.note = "Vosk error: ${e.message}" }
@@ -97,7 +97,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         if (speech != null) return
         val m = model
         if (m == null) {
-            st.note = "Vosk model अभी load नहीं हुआ / not loaded yet"
+            st.note = "Vosk model is not loaded yet. Please wait or download it in Setup."
             return
         }
         try {
@@ -105,7 +105,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
             speech = s
             s.startListening(this)
             st.listening = true
-            st.status = "सुन रहा हूँ… / Listening"
+            st.status = "Listening…"
         } catch (e: Throwable) {
             speech = null
             st.note = "Mic error: ${e.message}"
@@ -116,7 +116,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         try { speech?.shutdown() } catch (_: Throwable) {}
         speech = null
         st.listening = false
-        st.status = "तैयार / Ready"
+        st.status = "Ready"
     }
 
     override fun onResult(hypothesis: String?) {
@@ -125,7 +125,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         if (text.isEmpty()) return
         stopListening()
         st.messages.add(Msg(true, text))
-        st.status = "सोच रहा हूँ… / Thinking"
+        st.status = "Thinking…"
         io.execute {
             val reply = think(text)
             st.post {
@@ -138,7 +138,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
     private fun think(text: String): String {
         val l = llm
         if (l == null) {
-            return if (st.lang == "hi") "Gemma model नहीं है। आपने कहा: $text" else "Gemma model is missing. You said: $text"
+            return if (st.lang == "hi") "Gemma model is missing. You said: $text" else "Gemma model is missing. You said: $text"
         }
         val langName = if (st.lang == "hi") "Hindi" else "English"
         val prompt = "<start_of_turn>user\nYou are a friendly voice assistant. " +
@@ -152,10 +152,10 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
 
     private fun speak(text: String) {
         if (!ttsReady) {
-            st.status = "तैयार / Ready"
+            st.status = "Ready"
             return
         }
-        st.status = "बोल रहा हूँ… / Speaking"
+        st.status = "Speaking…"
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
     }
 

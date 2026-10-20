@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var engine: VoiceEngine
 
     private val micPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) engine.startListening() else vm.note = "माइक की अनुमति चाहिए / Mic permission needed"
+        if (ok) engine.startListening() else vm.note = "Microphone permission is required."
     }
 
     private val pickModel = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
                     vm.post { vm.note = "Vosk $l download… 0%" }
                     ModelStore.fetchVosk(this, l) { p -> vm.post { vm.note = "Vosk $l download… $p%" } }
                 }
-                vm.post { vm.note = "Vosk तैयार ✓"; vm.tick++ }
+                vm.post { vm.note = "Vosk models downloaded successfully."; vm.tick++ }
                 engine.loadVosk()
             } catch (e: Throwable) {
                 vm.post { vm.note = "Error: ${e.message}" }
@@ -83,7 +83,7 @@ class MainActivity : ComponentActivity() {
 
     fun downloadLlm() {
         val url = vm.llmUrl.trim()
-        if (url.isEmpty()) { vm.note = "पहले Gemma का link डालो / Paste the Gemma link first"; return }
+        if (url.isEmpty()) { vm.note = "Gemma model URL is missing."; return }
         if (vm.busy) return
         vm.busy = true
         Thread {
@@ -92,7 +92,7 @@ class MainActivity : ComponentActivity() {
                 ModelStore.download(url, ModelStore.llmFile(this), vm.hfToken) { p ->
                     vm.post { vm.note = "Gemma download… $p%" }
                 }
-                vm.post { vm.note = "Gemma तैयार ✓ (load हो रहा है)"; vm.tick++ }
+                vm.post { vm.note = "Gemma downloaded. Loading model…"; vm.tick++ }
                 engine.loadLlm()
             } catch (e: Throwable) {
                 vm.post { vm.note = "Error: ${e.message}" }
@@ -105,13 +105,13 @@ class MainActivity : ComponentActivity() {
     private fun copyModel(uri: Uri) {
         if (vm.busy) return
         vm.busy = true
-        vm.note = "Gemma file copy हो रही है…"
+        vm.note = "Copying Gemma model file…"
         Thread {
             try {
                 contentResolver.openInputStream(uri)?.use { input ->
                     ModelStore.llmFile(this).outputStream().use { input.copyTo(it) }
                 }
-                vm.post { vm.note = "Gemma तैयार ✓"; vm.tick++ }
+                vm.post { vm.note = "Gemma model copied successfully."; vm.tick++ }
                 engine.loadLlm()
             } catch (e: Throwable) {
                 vm.post { vm.note = "Error: ${e.message}" }
@@ -144,30 +144,30 @@ fun SetupScreen(st: AppState, act: MainActivity) {
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("NK Voice AI", style = MaterialTheme.typography.headlineSmall)
-        Text("एक बार इंटरनेट से models लो। उसके बाद सब offline चलेगा।")
+        Text("Download the models once while connected to the internet. Speech recognition and AI replies can then run offline.")
 
-        Text("Vosk हिंदी: ${if (hiOk) "✓" else "✗"}    Vosk English: ${if (enOk) "✓" else "✗"}    Gemma: ${if (llmOk) "✓" else "✗"}")
+        Text("Vosk Hindi: ${if (hiOk) "✓ Ready" else "✗ Missing"}    Vosk English: ${if (enOk) "✓ Ready" else "✗ Missing"}    Gemma: ${if (llmOk) "✓ Ready" else "✗ Missing"}")
 
         Button(onClick = { act.downloadVosk() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("1) Vosk (हिंदी + English) download करो")
+            Text("1) Download Vosk speech models (Hindi + English)")
         }
 
-        Text("Gemma model (MediaPipe .task या .bin file). Hugging Face का direct link डालो:")
+        Text("2) Gemma AI model (about 555 MB). A download URL is filled in below. You can keep it or replace it with another Android MediaPipe .task model URL. The model is not bundled in the APK because it is too large.")
         OutlinedTextField(
             value = st.llmUrl, onValueChange = { st.llmUrl = it },
-            label = { Text("Gemma link (https://huggingface.co/.../resolve/main/xxx.task)") },
+            label = { Text("Gemma model download URL") },
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = st.hfToken, onValueChange = { st.hfToken = it },
-            label = { Text("Hugging Face token (ज़रूरी हो तो)") },
+            label = { Text("Hugging Face access token (optional)") },
             modifier = Modifier.fillMaxWidth()
         )
         Button(onClick = { act.downloadLlm() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("2) Gemma link से download करो")
+            Text("Download Gemma model")
         }
         OutlinedButton(onClick = { act.pickLlmFile() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("या फ़ोन से Gemma file चुनो")
+            Text("Choose a Gemma model file from this phone")
         }
 
         if (st.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -177,7 +177,7 @@ fun SetupScreen(st: AppState, act: MainActivity) {
             onClick = { st.showSetup = false },
             enabled = (hiOk || enOk) && !st.busy,
             modifier = Modifier.fillMaxWidth()
-        ) { Text("चैट शुरू करो / Start chat") }
+        ) { Text("Start chat") }
     }
 }
 
@@ -190,7 +190,7 @@ fun ChatScreen(st: AppState, act: MainActivity) {
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            FilterChip(selected = st.lang == "hi", onClick = { act.setLang("hi") }, label = { Text("हिंदी") })
+            FilterChip(selected = st.lang == "hi", onClick = { act.setLang("hi") }, label = { Text("Hindi") })
             Spacer(Modifier.width(8.dp))
             FilterChip(selected = st.lang == "en", onClick = { act.setLang("en") }, label = { Text("English") })
             Spacer(Modifier.weight(1f))
@@ -221,7 +221,7 @@ fun ChatScreen(st: AppState, act: MainActivity) {
             Text("Hands-free")
             Spacer(Modifier.weight(1f))
             Button(onClick = { act.onMic() }) {
-                Text(if (st.listening) "⏹ रोको" else "🎤 बोलो")
+                Text(if (st.listening) "⏹ Stop" else "🎤 Speak")
             }
         }
     }
