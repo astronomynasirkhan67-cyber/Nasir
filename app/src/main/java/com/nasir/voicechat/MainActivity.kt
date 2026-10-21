@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var engine: VoiceEngine
 
     private val micPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) engine.startListening() else vm.note = "Microphone permission is required."
+        if (!ok) vm.note = "Microphone permission is required for voice chat."
     }
 
     private val pickModel = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -40,6 +40,9 @@ class MainActivity : ComponentActivity() {
         vm.lang = "en"
         engine.init()
         setContent { App(vm, this) }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            micPerm.launch(Manifest.permission.RECORD_AUDIO)
+        }
         autoSetup()
     }
 

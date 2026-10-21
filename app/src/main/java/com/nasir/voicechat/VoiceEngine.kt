@@ -124,11 +124,9 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                 try { engine?.close() } catch (_: Throwable) {}
                 engine = null
                 val path = ModelStore.llmFile(ctx).absolutePath
-                engine = try {
-                    openEngine(path, Backend.GPU())
-                } catch (_: Throwable) {
-                    openEngine(path, Backend.CPU())   // phones without a usable GPU
-                }
+                // CPU is slower but works on every phone. The GPU backend loaded fine on
+                // the Vivo Y200 but crashed on the first reply ("Failed to invoke the compiled model").
+                engine = openEngine(path, Backend.CPU())
                 newConversation()
                 st.post { st.gemmaReady = true; st.note = "Gemma 4 is ready ✓" }
             } catch (e: Throwable) {
@@ -139,6 +137,11 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
 
     fun startListening() {
         if (speech != null) return
+        if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            st.note = "Microphone permission is needed. Allow it in the pop-up, or in Settings > Apps > NK Voice AI > Permissions."
+            return
+        }
         val m = model
         if (m == null) {
             st.note = "The speech model is still loading. Please try again."
@@ -195,11 +198,30 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         val c = conversation
             ?: return "Gemma is not ready yet. Please wait for the model to finish downloading and loading."
         return try {
-            c.sendMessage(text).toString().replace("<end_of_turn>", "").trim()
-                .ifEmpty { "I have no answer for that. Please try asking differently." }
+            ask(c, text)
         } catch (e: Throwable) {
-            "I could not generate a reply: ${e.message ?: "unknown error"}"
+            // The native engine may be stuck in a failed state: rebuild it once and retry.
+            try {
+                rebuildEngine()
+                val c2 = conversation ?: throw IllegalStateException("engine not available")
+                ask(c2, text)
+            } catch (e2: Throwable) {
+                "I could not generate a reply: ${e2.message ?: e.message ?: "unknown error"}"
+            }
         }
+    }
+
+    private fun ask(c: Conversation, text: String): String =
+        c.sendMessage(text).toString().replace("<end_of_turn>", "").trim()
+            .ifEmpty { "I have no answer for that. Please try asking differently." }
+
+    private fun rebuildEngine() {
+        try { conversation?.close() } catch (_: Throwable) {}
+        conversation = null
+        try { engine?.close() } catch (_: Throwable) {}
+        engine = null
+        engine = openEngine(ModelStore.llmFile(ctx).absolutePath, Backend.CPU())
+        newConversation()
     }
 
     private fun speak(text: String) {
