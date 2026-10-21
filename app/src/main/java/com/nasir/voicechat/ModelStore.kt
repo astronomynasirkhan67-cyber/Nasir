@@ -14,14 +14,18 @@ object ModelStore {
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
-    fun voskName(lang: String) =
-        if (lang == "hi") "vosk-model-small-hi-0.22" else "vosk-model-small-en-us-0.15"
+    // Offline English speech model (Vosk). Urdu listening uses the phone's own speech service.
+    const val VOSK_NAME = "vosk-model-small-en-us-0.15"
+    const val VOSK_URL = "https://alphacephei.com/vosk/models/$VOSK_NAME.zip"
 
-    fun voskUrl(lang: String) = "https://alphacephei.com/vosk/models/${voskName(lang)}.zip"
+    fun voskDir(ctx: Context) = File(File(ctx.filesDir, "models"), VOSK_NAME)
 
-    fun voskDir(ctx: Context, lang: String) = File(File(ctx.filesDir, "models"), voskName(lang))
+    fun hasVosk(ctx: Context) = File(voskDir(ctx), "am").exists()
 
-    fun hasVosk(ctx: Context, lang: String) = File(voskDir(ctx, lang), "am").exists()
+    // Frees the space of the old Hindi speech model (Hindi was removed).
+    fun removeOldHindi(ctx: Context) {
+        try { File(File(ctx.filesDir, "models"), "vosk-model-small-hi-0.22").deleteRecursively() } catch (_: Throwable) {}
+    }
 
     // Gemma 4 E2B (LiteRT-LM). Public model, no Hugging Face login needed (~2.4 GB).
     const val GEMMA_URL =
@@ -98,9 +102,9 @@ object ModelStore {
         }
     }
 
-    fun fetchVosk(ctx: Context, lang: String, onProgress: (Int) -> Unit) {
-        val zip = File(ctx.cacheDir, voskName(lang) + ".zip")
-        download(voskUrl(lang), zip, onProgress)
+    fun fetchVosk(ctx: Context, onProgress: (Int) -> Unit) {
+        val zip = File(ctx.cacheDir, "$VOSK_NAME.zip")
+        download(VOSK_URL, zip, onProgress)
         unzip(zip, File(ctx.filesDir, "models"))
         zip.delete()
     }
