@@ -3,7 +3,13 @@ package com.nasir.voicechat
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Conversation
+import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.SamplerConfig
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -16,7 +22,11 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
 
     private var model: Model? = null
     private var speech: SpeechService? = null
-    private var llm: LlmInference? = null
+
+    // Gemma 4 (LiteRT-LM). Every access happens on the single `io` thread.
+    private var engine: Engine? = null
+    private var conversation: Conversation? = null
+
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private val io = Executors.newSingleThreadExecutor()
@@ -56,6 +66,8 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         st.lang = l
         applyTtsLang()
         loadVosk()
+        // New conversation so Gemma answers in the newly selected language.
+        io.execute { try { newConversation() } catch (_: Throwable) {} }
     }
 
     fun loadVosk() {
@@ -66,7 +78,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                 if (ModelStore.hasVosk(ctx, st.lang)) {
                     model = Model(ModelStore.voskDir(ctx, st.lang).absolutePath)
                 } else {
-                    st.post { st.note = "Speech model not found. Download it from Setup." }
+                    st.post { st.note = "Speech model not found yet." }
                 }
             } catch (e: Throwable) {
                 st.post { st.note = "Vosk error: ${e.message}" }
@@ -74,21 +86,53 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         }
     }
 
+    private fun openEngine(path: String, backend: Backend): Engine {
+        val e = Engine(EngineConfig(modelPath = path, backend = backend, cacheDir = ctx.cacheDir.path))
+        try {
+            e.initialize()
+        } catch (t: Throwable) {
+            try { e.close() } catch (_: Throwable) {}
+            throw t
+        }
+        return e
+    }
+
+    private fun newConversation() {
+        val e = engine ?: return
+        try { conversation?.close() } catch (_: Throwable) {}
+        conversation = null
+        val langName = if (st.lang == "hi") "Hindi" else "English"
+        conversation = e.createConversation(
+            ConversationConfig(
+                systemInstruction = Contents.of(
+                    "You are NK Voice AI, a helpful and careful assistant. Reply only in $langName. " +
+                        "Keep answers short and clear. Use plain text only, no markdown, no emojis, " +
+                        "because your reply is read aloud."
+                ),
+                samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.7)
+            )
+        )
+    }
+
     fun loadLlm() {
         io.execute {
             try {
-                if (ModelStore.hasLlm(ctx)) {
-                    llm?.close()
-                    llm = LlmInference.createFromOptions(
-                        ctx,
-                        LlmInference.LlmInferenceOptions.builder()
-                            .setModelPath(ModelStore.llmFile(ctx).absolutePath)
-                            .setMaxTokens(256)
-                            .build()
-                    )
+                if (!ModelStore.hasLlm(ctx)) return@execute
+                st.post { st.gemmaReady = false; st.note = "Loading Gemma 4… (first time can take a minute)" }
+                try { conversation?.close() } catch (_: Throwable) {}
+                conversation = null
+                try { engine?.close() } catch (_: Throwable) {}
+                engine = null
+                val path = ModelStore.llmFile(ctx).absolutePath
+                engine = try {
+                    openEngine(path, Backend.GPU())
+                } catch (_: Throwable) {
+                    openEngine(path, Backend.CPU())   // phones without a usable GPU
                 }
+                newConversation()
+                st.post { st.gemmaReady = true; st.note = "Gemma 4 is ready ✓" }
             } catch (e: Throwable) {
-                st.post { st.note = "Gemma load error: ${e.message}" }
+                st.post { st.gemmaReady = false; st.note = "Gemma load error: ${e.message}" }
             }
         }
     }
@@ -148,17 +192,13 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
     }
 
     private fun think(text: String): String {
-        val l = llm
-        if (l == null) {
-            return "Gemma model is not installed yet. Please open Setup and install a compatible model."
-        }
-        val langName = if (st.lang == "hi") "Hindi" else "English"
-        val prompt = "<start_of_turn>user\nYou are NK Voice AI, a helpful and careful assistant. " +
-            "Reply only in $langName. Answer clearly and concisely.\n$text<end_of_turn>\n<start_of_turn>model\n"
+        val c = conversation
+            ?: return "Gemma is not ready yet. Please wait for the model to finish downloading and loading."
         return try {
-            l.generateResponse(prompt).replace("<end_of_turn>", "").trim()
+            c.sendMessage(text).toString().replace("<end_of_turn>", "").trim()
+                .ifEmpty { "I have no answer for that. Please try asking differently." }
         } catch (e: Throwable) {
-            "I could not generate a reply. Please check the Gemma model file in Setup and try again."
+            "I could not generate a reply: ${e.message ?: "unknown error"}"
         }
     }
 
@@ -168,7 +208,8 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
             return
         }
         st.status = "Speaking…"
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
+        val spoken = text.replace(Regex("[*#`_~>]"), " ")
+        tts?.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, "reply")
     }
 
     override fun onPartialResult(hypothesis: String?) {}
@@ -179,7 +220,10 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
     fun release() {
         stopListening()
         try { model?.close() } catch (_: Throwable) {}
-        try { llm?.close() } catch (_: Throwable) {}
+        io.execute {
+            try { conversation?.close() } catch (_: Throwable) {}
+            try { engine?.close() } catch (_: Throwable) {}
+        }
         tts?.shutdown()
         io.shutdown()
     }

@@ -36,10 +36,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         engine = VoiceEngine(this, vm)
-        vm.showSetup = !(ModelStore.hasVosk(this, "en") || ModelStore.hasVosk(this, "hi"))
+        vm.showSetup = !(ModelStore.hasLlm(this) && (ModelStore.hasVosk(this, "en") || ModelStore.hasVosk(this, "hi")))
         vm.lang = "en"
         engine.init()
         setContent { App(vm, this) }
+        autoSetup()
     }
 
     override fun onDestroy() {
@@ -63,41 +64,34 @@ class MainActivity : ComponentActivity() {
 
     fun pickLlmFile() = pickModel.launch(arrayOf("*/*"))
 
-    fun downloadVosk() {
+    // Downloads everything that is missing (speech models + Gemma 4), by itself, on first launch.
+    // Safe to call again: finished files are skipped and half-finished downloads resume.
+    fun autoSetup() {
         if (vm.busy) return
+        val needVosk = listOf("hi", "en").filter { !ModelStore.hasVosk(this, it) }
+        val needGemma = !ModelStore.hasLlm(this)
+        if (needVosk.isEmpty() && !needGemma) return
         vm.busy = true
         Thread {
             try {
-                for (l in listOf("hi", "en")) {
-                    if (ModelStore.hasVosk(this, l)) continue
-                    vm.post { vm.note = "Downloading Vosk $l… 0%" }
-                    ModelStore.fetchVosk(this, l) { p -> vm.post { vm.note = "Downloading Vosk $l… $p%" } }
+                for (l in needVosk) {
+                    vm.post { vm.note = "Downloading speech model ($l)… 0%" }
+                    ModelStore.fetchVosk(this, l) { p -> vm.post { vm.note = "Downloading speech model ($l)… $p%" } }
+                    vm.post { vm.tick++ }
+                    if (l == vm.lang) engine.loadVosk()
                 }
-                vm.post { vm.note = "Vosk models downloaded ✓"; vm.tick++ }
-                engine.loadVosk()
-            } catch (e: Throwable) {
-                vm.post { vm.note = "Setup error: ${e.message ?: "Unknown error"}" }
-            } finally {
-                vm.post { vm.busy = false }
-            }
-        }.start()
-    }
-
-    fun downloadLlm() {
-        val url = vm.llmUrl.trim()
-        if (url.isEmpty()) { vm.note = "Please enter a direct Gemma model download link first."; return }
-        if (vm.busy) return
-        vm.busy = true
-        Thread {
-            try {
-                vm.post { vm.note = "Downloading Gemma… 0%" }
-                ModelStore.download(url, ModelStore.llmFile(this), vm.hfToken) { p ->
-                    vm.post { vm.note = "Downloading Gemma… $p%" }
+                if (needVosk.isNotEmpty()) engine.loadVosk()
+                if (needGemma) {
+                    vm.post { vm.note = "Downloading Gemma 4 (about 2.4 GB, use Wi-Fi)… 0%" }
+                    ModelStore.fetchGemma(this) { p ->
+                        vm.post { vm.note = "Downloading Gemma 4 (about 2.4 GB, use Wi-Fi)… $p%" }
+                    }
+                    vm.post { vm.tick++ }
+                    engine.loadLlm()
                 }
-                vm.post { vm.note = "Gemma downloaded ✓ Loading model…"; vm.tick++ }
-                engine.loadLlm()
+                vm.post { vm.note = "All set ✓"; vm.tick++; vm.showSetup = false }
             } catch (e: Throwable) {
-                vm.post { vm.note = "Setup error: ${e.message ?: "Unknown error"}" }
+                vm.post { vm.note = "Download stopped: ${e.message ?: "Unknown error"}. Tap \"Download / resume\" to continue." }
             } finally {
                 vm.post { vm.busy = false }
             }
@@ -110,9 +104,14 @@ class MainActivity : ComponentActivity() {
         vm.note = "Copying Gemma model file…"
         Thread {
             try {
+                val dest = ModelStore.llmFile(this)
+                dest.parentFile?.mkdirs()
+                val tmp = java.io.File(dest.path + ".part")
                 contentResolver.openInputStream(uri)?.use { input ->
-                    ModelStore.llmFile(this).outputStream().use { input.copyTo(it) }
+                    tmp.outputStream().use { input.copyTo(it) }
                 }
+                if (dest.exists()) dest.delete()
+                if (!tmp.renameTo(dest)) throw java.io.IOException("Could not save file")
                 vm.post { vm.note = "Gemma model file copied ✓"; vm.tick++ }
                 engine.loadLlm()
             } catch (e: Throwable) {
@@ -145,26 +144,17 @@ fun SetupScreen(st: AppState, act: MainActivity) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("NK Voice AI", style = MaterialTheme.typography.headlineLarge)
-        Text("Your private AI assistant for English text chat and voice conversations.")
-        Text("Models  •  Vosk English: ${if (enOk) "Ready ✓" else "Not installed"}  •  Vosk Hindi: ${if (hiOk) "Ready ✓" else "Not installed"}  •  Gemma: ${if (llmOk) "Ready ✓" else "Not installed"}")
-        Button(onClick = { act.downloadVosk() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("1. Download speech models (English + Hindi)")
-        }
-        Text("Gemma language model")
-        Text("Choose a compatible MediaPipe .task model file, or provide its direct download URL. The model is large and is not bundled inside the APK.")
-        OutlinedTextField(value = st.llmUrl, onValueChange = { st.llmUrl = it },
-            label = { Text("Direct Gemma model URL") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(value = st.hfToken, onValueChange = { st.hfToken = it },
-            label = { Text("Hugging Face token (if required)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Button(onClick = { act.downloadLlm() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("2. Download Gemma model")
-        }
-        OutlinedButton(onClick = { act.pickLlmFile() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("Choose a model file from this phone")
-        }
+        Text("Your private offline AI. On first launch the app downloads its own models (speech + Gemma 4). After that it works without internet.")
+        Text("Speech English: ${if (enOk) "Ready ✓" else "Not installed"}\nSpeech Hindi: ${if (hiOk) "Ready ✓" else "Not installed"}\nGemma 4: ${if (llmOk) (if (st.gemmaReady) "Ready ✓" else "Downloaded, loading…") else "Not installed"}")
         if (st.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (st.note.isNotEmpty()) Text(st.note)
-        Button(onClick = { st.showSetup = false }, enabled = (hiOk || enOk) && !st.busy,
+        Button(onClick = { act.autoSetup() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
+            Text("Download / resume")
+        }
+        OutlinedButton(onClick = { act.pickLlmFile() }, enabled = !st.busy, modifier = Modifier.fillMaxWidth()) {
+            Text("I already have the .litertlm file on this phone")
+        }
+        Button(onClick = { st.showSetup = false }, enabled = (hiOk || enOk || llmOk) && !st.busy,
             modifier = Modifier.fillMaxWidth()) { Text("Start chatting") }
     }
 }

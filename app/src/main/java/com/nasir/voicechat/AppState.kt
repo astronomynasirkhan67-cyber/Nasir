@@ -20,8 +20,7 @@ class AppState {
     var showSetup by mutableStateOf(true)
     var busy by mutableStateOf(false)
     var listening by mutableStateOf(false)
-    var llmUrl by mutableStateOf("")
-    var hfToken by mutableStateOf("")
+    var gemmaReady by mutableStateOf(false)
     var tick by mutableStateOf(0)
 
     private val main = Handler(Looper.getMainLooper())

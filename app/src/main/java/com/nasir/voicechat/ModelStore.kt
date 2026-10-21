@@ -11,7 +11,7 @@ import java.util.zip.ZipInputStream
 object ModelStore {
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
     fun voskName(lang: String) =
@@ -23,23 +23,43 @@ object ModelStore {
 
     fun hasVosk(ctx: Context, lang: String) = File(voskDir(ctx, lang), "am").exists()
 
-    fun llmFile(ctx: Context) = File(ctx.filesDir, "gemma.task")
+    // Gemma 4 E2B (LiteRT-LM). Public model, no Hugging Face login needed (~2.4 GB).
+    const val GEMMA_URL =
+        "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
 
-    fun hasLlm(ctx: Context) = llmFile(ctx).let { it.exists() && it.length() > 1_000_000 }
+    fun llmFile(ctx: Context) = File(File(ctx.filesDir, "models"), "gemma-4-E2B-it.litertlm")
 
-    fun download(url: String, dest: File, token: String?, onProgress: (Int) -> Unit) {
+    // The file is only renamed to its final name after a complete download/copy.
+    fun hasLlm(ctx: Context) = llmFile(ctx).let { it.exists() && it.length() > 100_000_000 }
+
+    fun fetchGemma(ctx: Context, onProgress: (Int) -> Unit) {
+        download(GEMMA_URL, llmFile(ctx), onProgress)
+    }
+
+    // Resumable download: keeps a .part file and continues from it after a failure.
+    fun download(url: String, dest: File, onProgress: (Int) -> Unit) {
+        dest.parentFile?.mkdirs()
+        val tmp = File(dest.path + ".part")
+        val have = if (tmp.exists()) tmp.length() else 0L
         val rb = Request.Builder().url(url)
-        if (!token.isNullOrBlank()) rb.header("Authorization", "Bearer ${token.trim()}")
+        if (have > 0) rb.header("Range", "bytes=$have-")
         http.newCall(rb.build()).execute().use { r ->
+            if (r.code == 416 && tmp.exists()) {
+                // .part file is already the complete file
+                if (dest.exists()) dest.delete()
+                if (!tmp.renameTo(dest)) throw IOException("Could not save file")
+                return
+            }
             if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
             val body = r.body ?: throw IOException("Empty response")
-            val total = body.contentLength()
-            dest.parentFile?.mkdirs()
-            val tmp = File(dest.path + ".part")
-            body.byteStream().use { input ->
-                tmp.outputStream().use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    var done = 0L
+            val resumed = r.code == 206 && have > 0
+            val start = if (resumed) have else 0L
+            val len = body.contentLength()
+            val total = if (len > 0) len + start else -1L
+            java.io.FileOutputStream(tmp, resumed).use { out ->
+                body.byteStream().use { input ->
+                    val buf = ByteArray(256 * 1024)
+                    var done = start
                     var last = -1
                     while (true) {
                         val n = input.read(buf)
@@ -53,9 +73,9 @@ object ModelStore {
                     }
                 }
             }
-            if (dest.exists()) dest.delete()
-            if (!tmp.renameTo(dest)) throw IOException("Could not save file")
         }
+        if (dest.exists()) dest.delete()
+        if (!tmp.renameTo(dest)) throw IOException("Could not save file")
     }
 
     fun unzip(zip: File, outDir: File) {
@@ -80,7 +100,7 @@ object ModelStore {
 
     fun fetchVosk(ctx: Context, lang: String, onProgress: (Int) -> Unit) {
         val zip = File(ctx.cacheDir, voskName(lang) + ".zip")
-        download(voskUrl(lang), zip, null, onProgress)
+        download(voskUrl(lang), zip, onProgress)
         unzip(zip, File(ctx.filesDir, "models"))
         zip.delete()
     }

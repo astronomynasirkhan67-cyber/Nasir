@@ -1,34 +1,19 @@
-# NK Voice AI + Gemma 4 On-Device
+# NK Voice AI
 
-This repository contains two Android app projects:
+Offline AI voice assistant for Android (English + Hindi).
 
-1. **NK Voice AI (native Kotlin)** — the existing Jetpack Compose app with Vosk speech recognition and Android text-to-speech. Its existing MediaPipe integration accepts compatible `.task` models.
-2. **Gemma 4 On-Device (Flutter)** — the supplied Gemma 4 E2B integration using `flutter_gemma` / LiteRT-LM and a public `.litertlm` model download. The model is downloaded on first launch and is not committed to GitHub.
+- Speech to text: Vosk
+- Brain: **Gemma 4 E2B** running on the phone through Google LiteRT-LM (native Kotlin, no Flutter)
+- Text to speech: Android TTS
 
-## Important compatibility note
+## First launch
+The app downloads everything it needs by itself (speech models + Gemma 4, about 2.4 GB for Gemma, use Wi-Fi).
+Downloads resume if they are interrupted (tap "Download / resume"). After that it works with no internet.
 
-Gemma 4's `.litertlm` model is **not compatible** with the native app's current MediaPipe `.task` runtime. The two runtimes cannot be mixed just by copying the model file. To avoid breaking the existing NK Voice AI Android build, the Gemma 4 implementation is included as a separate Flutter app in `gemma-on-device/`. It is part of this repository, but it does not yet run inside the native Kotlin app or its APK.
+## Build
+Push to GitHub. The workflow in `.github/workflows/build.yml` builds the APK:
+Actions tab -> latest run -> Artifacts -> `NKVoiceAI-APK`.
 
-## Build the existing NK Voice AI APK
-
-Use the repository's existing GitHub Actions workflow (`.github/workflows/build.yml`). The native app still requires a MediaPipe-compatible `.task` file if you want its current LLM feature enabled.
-
-## Build the Gemma 4 app
-
-Requirements: Flutter 3.41+, Dart 3.11+, Android API 26+, and preferably a physical Android device with 6 GB or more RAM and around 3 GB free storage.
-
-```bash
-cd gemma-on-device
-flutter pub get
-flutter run
-```
-
-The Gemma app downloads the model at first setup. Internet is needed for the initial download; inference runs on-device afterward. The model itself is not included in this ZIP because it is about 2.4 GB and is downloaded by the app.
-
-## Push to GitHub
-
-Extract this ZIP, upload the contents of `Nasir-main/` to your repository (including the hidden `.github` folder), then commit and push. Keep the `gemma-on-device/` directory intact so its Flutter project files remain together.
-
-## Licenses and model terms
-
-The included Gemma sample project declares MIT licensing. Review the Gemma model's own license and terms from its official publisher before distributing an app or model weights.
+## Notes
+- Needs Android 8+ (API 26), arm64 phone, about 3 GB free storage, 6 GB+ RAM recommended.
+- Gemma 4 model terms: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm
