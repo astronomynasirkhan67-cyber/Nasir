@@ -1,0 +1,58 @@
+name: Build NK Voice AI Windows Installer
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/build-windows.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    # Legacy runner for a better chance of building binaries usable on older Windows.
+    runs-on: windows-2019
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8.10"
+          architecture: "x64"
+
+      - name: Install Python dependencies
+        working-directory: desktop
+        shell: cmd
+        run: |
+          python -m pip install --upgrade "pip<25"
+          python -m pip install -r requirements-win7.txt
+
+      - name: Package desktop application
+        working-directory: desktop
+        shell: cmd
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name NKVoiceAI --collect-all llama_cpp --collect-all vosk --collect-all pyttsx3 --collect-all comtypes --collect-all sounddevice main.py
+
+      - name: Install Inno Setup
+        uses: crazy-max/ghaction-chocolatey@v3
+        with:
+          args: install innosetup --no-progress
+
+      - name: Build installer
+        working-directory: desktop
+        shell: cmd
+        run: |
+          "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" NKVoiceAI.iss
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NKVoiceAI-Windows-Installer
+          path: desktop/dist/NKVoiceAI-Setup.exe
+          if-no-files-found: error

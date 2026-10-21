@@ -1,38 +1,23 @@
-# NK Voice AI — Windows Desktop (Offline)
+# NK Voice AI Desktop
 
-This is a desktop companion for the NK Voice AI Android project. It is a separate Python desktop app because the Android app uses Android-only Kotlin APIs and a LiteRT-LM model runtime.
+## Run from source
+- Use Python 3.8 64-bit for the legacy Windows target.
+- Install packages from `requirements-win7.txt`.
+- Run `python main.py`.
 
-## Features
-- Local chat using a GGUF language model through `llama-cpp-python`.
-- Optional offline speech recognition using Vosk and your PC microphone.
-- Text-to-speech using the Windows speech voices via `pyttsx3`.
-- No cloud/API key is used for chat inference after the model files and packages are installed.
+## Use
+1. Launch NK Voice AI.
+2. Click **Choose GGUF Model**, choose a compatible instruction-tuned `.gguf` file, and click **Load Model**.
+3. Ask questions. Once the model is loaded, local chat does not need the internet.
+4. Optional microphone input: download a Vosk model, extract it, then click **Listen (Vosk)** and select that folder.
+5. **Speak last reply** uses the Windows voices installed on your computer.
 
-## Requirements
-- Windows 10/11, 64-bit.
-- Python 3.10 or 3.11 recommended. Install from https://www.python.org/downloads/windows/ and enable **Add Python to PATH**.
-- RAM depends on the model. A 2B–4B quantized model may run on a PC with 8 GB RAM; larger models need more memory.
-- Free disk space for the model (often several GB).
+## Notes
+This is a desktop companion, not a direct port of the Android runtime. Android `.litertlm` models are not compatible with llama.cpp; use a GGUF model. No large model files are included in the source ZIP.
 
-## Setup
-1. Install Python.
-2. Double-click `install_windows.bat`.
-3. Download a compatible **instruction-tuned GGUF** model from a trusted model publisher. This desktop app cannot load the Android `.litertlm` model directly; download a GGUF version instead. Check the model license and choose a quantization that fits your RAM.
-4. Run `run_windows.bat`.
-5. Click **Choose GGUF Model**, select the `.gguf` file, then click **Load Model**.
-6. Type a question and click **Send**. After the model is loaded, text chat runs locally/offline.
+## Optional Qwen3 semantic recall (new)
+The desktop app can optionally load a **separate Qwen3-Embedding GGUF** file with the **Load Qwen3 Embeddings** button. When loaded, NK Voice AI embeds previous user prompts and retrieves up to three semantically similar turns to provide context for later answers. The small index is kept in memory for the current session and is cleared with **Clear chat**; it is not a persistent database.
 
-## Optional offline voice input
-1. Download a Vosk English model from https://alphacephei.com/vosk/models.
-2. Extract the downloaded archive to a folder.
-3. Click **Listen (Vosk)** and select the extracted model folder. Speak into your microphone. Recognized text appears in the message box; press **Send**.
-4. Urdu offline speech recognition depends on finding a compatible Urdu speech model; this starter desktop build provides Vosk microphone input and does not bundle an Urdu model.
+Important: the ZIP supplied as `qwen3-embedding-06b-gguf-main.zip` is a code recipe/notebook, **not model weights**. It does not contain a `.gguf` file. Download a compatible Qwen3-Embedding GGUF model separately from the official model page: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF . Then select the actual `.gguf` file in the app. You still need a separate instruction-tuned **chat** GGUF model for generating replies; an embedding model cannot answer chat prompts by itself.
 
-## Troubleshooting
-- **`llama-cpp-python` installation fails:** available wheels depend on Python version and architecture. Try Python 3.11 64-bit. If pip cannot find a compatible wheel, follow the build instructions at https://github.com/abetlen/llama-cpp-python.
-- **Model fails to load:** verify the file is a supported GGUF model, use an instruction-tuned model, and choose a quantization small enough for your RAM.
-- **Slow generation:** use a smaller quantized model, close memory-heavy applications, and lower `n_ctx` in `main.py` from `4096` to `2048`.
-- **No voice:** confirm Windows microphone permissions and that a speech output voice is installed.
-
-## Important
-The Android Gemma `.litertlm` model and Android Kotlin code are not a Windows desktop runtime. This folder is a separate offline desktop implementation. You need to download a compatible GGUF model and Vosk model yourself; these large model files are intentionally not included in the ZIP.
+This is an optional desktop feature. The Windows 7 target has limited RAM and older native-library compatibility, so loading two models may be slow or fail on low-memory PCs. The GitHub workflow builds the application but does not download or bundle model weights. Test on the target Windows version.
