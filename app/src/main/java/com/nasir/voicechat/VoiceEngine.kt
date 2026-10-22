@@ -26,7 +26,7 @@ import java.util.concurrent.Executors
  * Voice engine.
  *  - English listening: Vosk (offline).
  *  - Urdu listening: the phone's own speech recognizer (ur-PK).
- *  - Brain: Gemma 4 through LiteRT-LM (CPU).
+ *  - Brain: Gemma 4 or Qwen3 through LiteRT-LM (CPU), chosen in Setup.
  *  - Speaking: Android text-to-speech.
  *
  * Crash fixes compared with the old version:
@@ -165,19 +165,32 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         )
     }
 
+    private fun modelName() = ModelStore.selected(ctx).label
+
+    // Switch between Gemma 4 and Qwen3. Frees the old model first (RAM).
+    fun switchModel(id: String) {
+        if (id == ModelStore.selected(ctx).id) return
+        ModelStore.select(ctx, id)
+        st.modelId = id
+        st.gemmaReady = false
+        runIo { closeLlm(); System.gc() }
+        loadLlm()
+    }
+
     fun loadLlm() {
         runIo {
             try {
-                if (!ModelStore.hasLlm(ctx)) return@runIo
-                st.post { st.gemmaReady = false; st.note = "Loading Gemma 4… (first time can take a minute)" }
+                if (!ModelStore.hasLlm(ctx)) { st.post { st.gemmaReady = false }; return@runIo }
+                val name = modelName()
+                st.post { st.gemmaReady = false; st.note = "Loading $name… (first time can take a minute)" }
                 closeLlm()
                 val path = ModelStore.llmFile(ctx).absolutePath
                 // CPU is slower but stable. The GPU backend crashed on the first reply on the Vivo Y200.
                 engine = openEngine(path, Backend.CPU())
                 newConversation()
-                st.post { st.gemmaReady = true; st.note = "Gemma 4 is ready ✓" }
+                st.post { st.gemmaReady = true; st.note = "$name is ready ✓" }
             } catch (e: Throwable) {
-                st.post { st.gemmaReady = false; st.note = "Gemma load error: ${e.message}" }
+                st.post { st.gemmaReady = false; st.note = "Model load error: ${e.message}" }
             }
         }
     }
@@ -192,7 +205,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
     private fun think(text: String): String {
         if (conversation == null) {
             return if (lang == "ur") "ابھی ماڈل تیار نہیں ہے۔ براہ کرم کچھ دیر انتظار کریں۔"
-            else "Gemma is not ready yet. Please wait for the model to finish downloading and loading."
+            else "The model is not ready yet. Please wait for it to finish downloading and loading."
         }
         // Fresh conversation every few questions: long histories are what slowed and crashed the app.
         if (turns >= MAX_TURNS) {
@@ -215,9 +228,16 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         }
     }
 
-    private fun ask(c: Conversation, text: String): String =
-        c.sendMessage(text).toString().replace("<end_of_turn>", "").trim()
+    private fun ask(c: Conversation, text: String): String {
+        // Qwen3 can "think" first; "/no_think" switches that off so replies are short and fast.
+        val prompt = if (ModelStore.selected(ctx).id == "qwen3") "$text /no_think" else text
+        return c.sendMessage(prompt).toString()
+            .replace("<end_of_turn>", "")
+            .replace("<|im_end|>", "")
+            .replace(Regex("(?s)<think>.*?</think>"), "")
+            .trim()
             .ifEmpty { "I have no answer for that. Please try asking differently." }
+    }
 
     private fun rebuildEngine() {
         closeLlm()

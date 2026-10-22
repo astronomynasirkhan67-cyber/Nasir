@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
         engine = VoiceEngine(this, vm)
         vm.showSetup = !(ModelStore.hasLlm(this) && ModelStore.hasVosk(this))
         vm.lang = "en"
+        vm.modelId = ModelStore.selected(this).id
         engine.init()
         setContent { App(vm, this) }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -86,6 +87,13 @@ class MainActivity : ComponentActivity() {
 
     fun sendText(text: String) = engine.sendText(text)
 
+    fun selectModel(id: String) {
+        if (vm.busy) return
+        engine.switchModel(id)
+        vm.note = ""
+        vm.tick++
+    }
+
     fun pickLlmFile() = pickModel.launch(arrayOf("*/*"))
 
     // Downloads everything that is missing (English speech model + Gemma 4) by itself.
@@ -108,9 +116,10 @@ class MainActivity : ComponentActivity() {
                     engine.loadVosk()
                 }
                 if (needGemma) {
-                    vm.post { vm.note = "Downloading Gemma 4 (about 2.4 GB, use Wi-Fi)… 0%" }
-                    ModelStore.fetchGemma(this) { p ->
-                        vm.post { vm.note = "Downloading Gemma 4 (about 2.4 GB, use Wi-Fi)… $p%" }
+                    val m = ModelStore.selected(this)
+                    vm.post { vm.note = "Downloading ${m.label} (${m.size}, use Wi-Fi)… 0%" }
+                    ModelStore.fetchLlm(this) { p ->
+                        vm.post { vm.note = "Downloading ${m.label} (${m.size}, use Wi-Fi)… $p%" }
                     }
                     vm.post { vm.tick++ }
                     engine.loadLlm()
@@ -127,7 +136,7 @@ class MainActivity : ComponentActivity() {
     private fun copyModel(uri: Uri) {
         if (vm.busy) return
         vm.busy = true
-        vm.note = "Copying Gemma model file…"
+        vm.note = "Copying ${ModelStore.selected(this).label} model file…"
         Thread {
             try {
                 val dest = ModelStore.llmFile(this)
@@ -138,7 +147,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (dest.exists()) dest.delete()
                 if (!tmp.renameTo(dest)) throw java.io.IOException("Could not save file")
-                vm.post { vm.note = "Gemma model file copied ✓"; vm.tick++ }
+                vm.post { vm.note = "Model file copied ✓"; vm.tick++ }
                 engine.loadLlm()
             } catch (e: Throwable) {
                 vm.post { vm.note = "Setup error: ${e.message ?: "Unknown error"}" }
@@ -258,7 +267,8 @@ fun blackButtonColors() = ButtonDefaults.buttonColors(
 fun SetupScreen(st: AppState, act: MainActivity) {
     val tick = st.tick
     val enOk = remember(tick) { ModelStore.hasVosk(act) }
-    val llmOk = remember(tick) { ModelStore.hasLlm(act) }
+    val llmOk = remember(tick, st.modelId) { ModelStore.hasLlm(act) }
+    val sel = remember(tick, st.modelId) { ModelStore.selected(act) }
     Column(
         Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
             .verticalScroll(rememberScrollState()).padding(20.dp),
@@ -278,15 +288,31 @@ fun SetupScreen(st: AppState, act: MainActivity) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("English voice: ${if (enOk) "Ready ✓" else "Not installed"}")
                 Text("Urdu voice: uses your phone's speech service")
-                Text("Gemma 4: ${if (llmOk) (if (st.gemmaReady) "Ready ✓" else "Downloaded, loading…") else "Not installed"}")
+                ModelStore.MODELS.forEach { m ->
+                    val has = remember(tick) { ModelStore.hasModel(act, m) }
+                    val state = when {
+                        !has -> "Not installed"
+                        m.id == st.modelId && st.gemmaReady -> "Ready ✓"
+                        m.id == st.modelId -> "Downloaded, loading…"
+                        else -> "Downloaded ✓"
+                    }
+                    Text("${m.label}: $state")
+                }
             }
         }
+        Text("Choose AI model", fontWeight = FontWeight.Medium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ModelStore.MODELS.forEach { m ->
+                LangPill(m.label, m.id == st.modelId) { act.selectModel(m.id) }
+            }
+        }
+        if (sel.id == "qwen3") Text("Qwen3 is fast and good in English. For Urdu answers Gemma 4 is usually better.", fontSize = 12.sp, color = Muted)
         if (st.busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Ink, trackColor = Line)
         if (st.note.isNotEmpty()) Text(st.note, fontSize = 13.sp, color = Muted)
         Button(
             onClick = { act.autoSetup(true) }, enabled = !st.busy,
             colors = blackButtonColors(), modifier = Modifier.fillMaxWidth()
-        ) { Text("Download / resume") }
+        ) { Text(if (llmOk) "Download / resume" else "Download ${sel.label}") }
         OutlinedButton(
             onClick = { act.pickLlmFile() }, enabled = !st.busy,
             modifier = Modifier.fillMaxWidth()
@@ -419,6 +445,12 @@ fun ChatScreen(st: AppState, act: MainActivity) {
             Spacer(Modifier.width(8.dp))
             Text("Hands-free", fontSize = 13.sp, color = Muted)
             Spacer(Modifier.weight(1f))
+            ModelStore.MODELS.forEach { m ->
+                if (ModelStore.hasModel(act, m)) {
+                    LangPill(m.label, m.id == st.modelId) { if (!st.responding) act.selectModel(m.id) }
+                    Spacer(Modifier.width(6.dp))
+                }
+            }
             TextButton(onClick = { st.showSetup = true }) { Text("Setup", color = Muted) }
         }
     }

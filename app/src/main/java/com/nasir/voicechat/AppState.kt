@@ -22,6 +22,8 @@ class AppState {
     var busy by mutableStateOf(false)
     var listening by mutableStateOf(false)
     var gemmaReady by mutableStateOf(false)
+    // id of the chosen chat model: "gemma4" or "qwen3"
+    var modelId by mutableStateOf("gemma4")
     var tick by mutableStateOf(0)
     // Report about the previous crash (shown once after a crash so we know the real cause).
     var crashInfo by mutableStateOf("")

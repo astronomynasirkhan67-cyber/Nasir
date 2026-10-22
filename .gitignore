@@ -3,10 +3,3 @@ build/
 local.properties
 *.iml
 .idea/
-
-
-# Windows desktop build output
-desktop/build/
-desktop/dist/
-desktop/__pycache__/
-desktop/*.spec

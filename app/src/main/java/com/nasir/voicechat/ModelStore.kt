@@ -27,17 +27,43 @@ object ModelStore {
         try { File(File(ctx.filesDir, "models"), "vosk-model-small-hi-0.22").deleteRecursively() } catch (_: Throwable) {}
     }
 
-    // Gemma 4 E2B (LiteRT-LM). Public model, no Hugging Face login needed (~2.4 GB).
-    const val GEMMA_URL =
-        "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+    // ---- Chat models (LiteRT-LM). The user picks one in Setup. ----
+    data class LlmModel(val id: String, val label: String, val file: String, val url: String, val size: String)
 
-    fun llmFile(ctx: Context) = File(File(ctx.filesDir, "models"), "gemma-4-E2B-it.litertlm")
+    val MODELS = listOf(
+        LlmModel(
+            "gemma4", "Gemma 4", "gemma-4-E2B-it.litertlm",
+            "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+            "about 2.4 GB"
+        ),
+        LlmModel(
+            "qwen3", "Qwen3", "Qwen3_1.7B.litertlm",
+            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3_1.7B.litertlm",
+            "about 2.1 GB"
+        )
+    )
+
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("nk", Context.MODE_PRIVATE)
+
+    fun selected(ctx: Context): LlmModel {
+        val id = prefs(ctx).getString("model", "gemma4")
+        return MODELS.firstOrNull { it.id == id } ?: MODELS[0]
+    }
+
+    fun select(ctx: Context, id: String) { prefs(ctx).edit().putString("model", id).apply() }
+
+    fun fileOf(ctx: Context, m: LlmModel) = File(File(ctx.filesDir, "models"), m.file)
+
+    fun llmFile(ctx: Context) = fileOf(ctx, selected(ctx))
 
     // The file is only renamed to its final name after a complete download/copy.
-    fun hasLlm(ctx: Context) = llmFile(ctx).let { it.exists() && it.length() > 100_000_000 }
+    fun hasModel(ctx: Context, m: LlmModel) = fileOf(ctx, m).let { it.exists() && it.length() > 100_000_000 }
 
-    fun fetchGemma(ctx: Context, onProgress: (Int) -> Unit) {
-        download(GEMMA_URL, llmFile(ctx), onProgress)
+    fun hasLlm(ctx: Context) = hasModel(ctx, selected(ctx))
+
+    fun fetchLlm(ctx: Context, onProgress: (Int) -> Unit) {
+        val m = selected(ctx)
+        download(m.url, fileOf(ctx, m), onProgress)
     }
 
     // Resumable download: keeps a .part file and continues from it after a failure.
