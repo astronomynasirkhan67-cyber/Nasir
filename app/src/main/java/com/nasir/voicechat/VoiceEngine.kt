@@ -5,6 +5,11 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.graphics.pdf.PdfRenderer
+import android.media.MediaMetadataRetriever
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
+import java.util.zip.ZipInputStream
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
@@ -186,6 +191,8 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                 systemInstruction = Contents.of(
                     "You are NK Voice AI, a helpful and careful assistant. Reply only in $langName. " +
                         "Keep every answer short: at most three short sentences. " +
+                        "Only when solving a maths or science problem, show the steps in at most eight short lines. " +
+                        "Write maths in plain text like d2i/dt2, e^(-t), 1/2, sqrt(x). Never use LaTeX, backslashes or dollar signs. " +
                         "Use plain text only, no markdown, no lists, no emojis, " +
                         "because your reply is read aloud."
                 ),
@@ -234,10 +241,12 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         if (lang == "ur") "ابھی ماڈل تیار نہیں ہے۔ براہ کرم کچھ دیر انتظار کریں۔"
         else "The model is not ready yet. Please wait for it to finish downloading and loading."
 
-    private fun cleanOut(s: String) = s
-        .replace("<end_of_turn>", "").replace("<|im_end|>", "")
-        .replace(Regex("(?s)<think>.*?(</think>|$)"), "")
-        .trim()
+    private fun cleanOut(s: String, math: Boolean = true): String {
+        val t = s.replace("<end_of_turn>", "").replace("<|im_end|>", "")
+            .replace(Regex("(?s)<think>.*?(</think>|$)"), "")
+            .trim()
+        return if (math) PlainMath.clean(t) else t
+    }
 
     private fun cutAtSentence(t: String): String {
         val i = t.indexOfLast { it in ".!?۔؟\n" }
@@ -246,13 +255,13 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
 
     // Sends one message and receives the answer piece by piece (streaming).
     // Stops early when the answer gets longer than maxChars (keeps replies fast).
-    private fun streamAsk(c: Conversation, msg: Contents, maxChars: Int, onText: (String) -> Unit): String {
+    private fun streamAsk(c: Conversation, msg: Contents, maxChars: Int, math: Boolean = true, onText: (String) -> Unit): String {
         val sb = StringBuilder()
         try {
             runBlocking {
                 c.sendMessageAsync(msg).collect { m ->
                     sb.append(m.toString())
-                    val t = cleanOut(sb.toString())
+                    val t = cleanOut(sb.toString(), math)
                     onText(t)
                     if (t.length >= maxChars) throw StopGen()
                 }
@@ -263,7 +272,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
             while (x != null) { if (x is StopGen) stopped = true; x = x.cause }
             if (!stopped) throw e
         }
-        val out = cleanOut(sb.toString())
+        val out = cleanOut(sb.toString(), math)
         return (if (out.length >= maxChars) cutAtSentence(out) else out)
             .ifEmpty { "I have no answer for that. Please try asking differently." }
     }
@@ -458,8 +467,8 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
     }
 
     // ---- UI helpers ----
-    private fun setMsg(idx: Int, t: String, fileUri: String? = null, mime: String? = null) {
-        st.post { if (idx < st.messages.size) st.messages[idx] = Msg(false, t.ifBlank { "…" }, fileUri, mime) }
+    private fun setMsg(idx: Int, t: String, fileUri: String? = null, mime: String? = null, fileName: String? = null) {
+        st.post { if (idx < st.messages.size) st.messages[idx] = Msg(false, t.ifBlank { "…" }, fileUri, mime, fileName) }
     }
 
     // Adds an empty answer bubble that is filled while the model writes. Main thread only.
@@ -556,46 +565,174 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         if (turns >= MAX_TURNS) { try { newConversation() } catch (_: Throwable) {} }
         // Qwen3 can "think" first; "/no_think" switches that off so replies are fast.
         val prompt = if (ModelStore.selected(ctx).id.startsWith("qwen3")) "$text /no_think" else text
-        val reply = generate(idx, { Contents.of(prompt) }, 700, true)
+        val reply = generate(idx, { Contents.of(prompt) }, 1100, true)
         setMsg(idx, reply)
         speakReady(reply, true)
     }
 
     // ---------------------------------------------------------------- pictures
 
-    fun askImage(uri: Uri, question: String) {
+    fun askImage(uri: Uri, question: String) = askFile(uri, question, "image")
+
+    private fun describe(uri: Uri): Pair<String, String> {
+        var name = uri.lastPathSegment ?: "file"
+        try {
+            ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) name = it.getString(0) ?: name
+            }
+        } catch (_: Throwable) {}
+        return name to (ctx.contentResolver.getType(uri) ?: "")
+    }
+
+    private fun kindOf(name: String, mime: String): String {
+        val n = name.lowercase()
+        return when {
+            mime.startsWith("image/") || Regex(".*\\.(jpg|jpeg|png|webp|bmp|gif)").matches(n) -> "image"
+            mime.startsWith("video/") || Regex(".*\\.(mp4|mkv|3gp|webm|mov)").matches(n) -> "video"
+            mime == "application/pdf" || n.endsWith(".pdf") -> "pdf"
+            n.endsWith(".docx") -> "docx"
+            mime.startsWith("text/") || Regex(".*\\.(txt|md|csv|json|xml|kt|java|py|ino|c|cpp|js|html|log)").matches(n) -> "text"
+            else -> "other"
+        }
+    }
+
+    // Picture, video, PDF, Word (.docx) or text file -> the model reads it and answers.
+    fun askFile(uri: Uri, question: String, forced: String? = null) {
         if (st.responding) return
-        if (!visionOk) {
-            st.note = "Picture questions need Gemma 4. Choose Gemma 4 in Setup (download it first)."
+        val (name, mime) = describe(uri)
+        val kind = forced ?: kindOf(name, mime)
+        if (kind == "other") {
+            st.note = "I cannot read this kind of file yet. Try a picture, video, PDF, Word (.docx) or text file."
+            return
+        }
+        if (kind in listOf("image", "video", "pdf") && !visionOk) {
+            st.note = "Pictures, videos and PDFs need Gemma 4. Choose Gemma 4 in Setup (download it first)."
             return
         }
         stopListening()
         val q = question.trim()
-        st.messages.add(Msg(true, if (q.isEmpty()) "🖼 Picture" else "🖼 Picture: $q"))
+        val icon = when (kind) { "image" -> "🖼"; "video" -> "🎬"; "pdf" -> "📄"; else -> "📎" }
+        st.messages.add(Msg(true, if (kind == "image" && forced != null && name == "file") "$icon Picture" + (if (q.isEmpty()) "" else ": $q")
+            else "$icon $name" + (if (q.isEmpty()) "" else ": $q")))
         val idx = beginResponse()
         val ok = runIo {
             try {
-                val path = prepareImage(uri)
-                val ask = if (q.isEmpty())
-                    "Look at this picture. Tell me what it shows and give useful information about it. " +
-                        "If there is text or a question in it, read it and answer it. Reply in at most six short sentences."
-                else "$q (Look at the picture. Reply in at most six short sentences.)"
+                var images: List<String> = emptyList()
+                var text: String? = null
+                when (kind) {
+                    "image" -> images = listOf(prepareImage(uri))
+                    "video" -> images = videoFrames(uri)
+                    "pdf" -> images = pdfPages(uri)
+                    "docx" -> text = readDocx(uri)
+                    else -> text = readText(uri)
+                }
+                if (images.isEmpty() && text.isNullOrBlank()) throw IllegalStateException("nothing readable in this file")
+                val base = when (kind) {
+                    "image" -> if (q.isEmpty()) "Look at this picture. Tell me what it shows and give useful information about it. If there is text or a question in it, read it and answer it." else "$q (Look at the picture.)"
+                    "video" -> "These are 3 frames taken from one video. " + (if (q.isEmpty()) "Describe what the video shows and give useful information." else q)
+                    "pdf" -> "These are the first pages of a PDF document. " + (if (q.isEmpty()) "Summarize it and answer any question or problem in it." else q)
+                    else -> (if (q.isEmpty()) "Summarize this file." else q) + "\n\nFile content:\n" + text
+                }
+                val noThink = if (images.isEmpty() && ModelStore.selected(ctx).id.startsWith("qwen3")) " /no_think" else ""
+                val ask = base + (if (kind == "image" || kind == "video") " Reply in at most six short sentences." else "") + noThink
                 if (conversation == null) { setMsg(idx, notReadyText()); return@runIo }
                 if (turns >= MAX_TURNS) { try { newConversation() } catch (_: Throwable) {} }
                 val reply = generate(idx, {
-                    Contents.of(Content.ImageFile(path), Content.Text(ask))
+                    if (images.isEmpty()) Contents.of(ask)
+                    else {
+                        val parts = ArrayList<Content>()
+                        images.forEach { parts.add(Content.ImageFile(it)) }
+                        parts.add(Content.Text(ask))
+                        Contents.of(*parts.toTypedArray())
+                    }
                 }, 1400, true)
                 setMsg(idx, reply)
                 speakReady(reply, true)
-                // Picture data makes the history heavy: start fresh on the next question.
+                // Files make the history heavy: start fresh on the next question.
                 turns = MAX_TURNS
             } catch (e: Throwable) {
-                setMsg(idx, "Could not read the picture: ${e.message ?: "unknown error"}")
+                setMsg(idx, "Could not read the file: ${e.message ?: "unknown error"}")
             } finally {
                 endResponse()
             }
         }
         if (!ok) { setMsg(idx, "Sorry, please try again."); endResponse() }
+    }
+
+    private fun saveJpeg(bmp: Bitmap, file: String): String {
+        val out = File(ctx.cacheDir, file)
+        out.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+        return out.absolutePath
+    }
+
+    private fun shrink(bmp: Bitmap, maxSide: Int): Bitmap {
+        val side = maxOf(bmp.width, bmp.height)
+        if (side <= maxSide) return bmp
+        val sc = maxSide.toFloat() / side
+        return Bitmap.createScaledBitmap(bmp, (bmp.width * sc).toInt(), (bmp.height * sc).toInt(), true)
+    }
+
+    // 3 frames from the video (20%, 50%, 80%).
+    private fun videoFrames(uri: Uri): List<String> {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, uri)
+            val dur = (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) * 1000L
+            val out = ArrayList<String>()
+            for ((i, f) in listOf(0.2, 0.5, 0.8).withIndex()) {
+                val bmp = r.getFrameAtTime((dur * f).toLong(), MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: continue
+                out.add(saveJpeg(shrink(bmp, 768), "video_$i.jpg"))
+            }
+            return out
+        } finally {
+            try { r.release() } catch (_: Throwable) {}
+        }
+    }
+
+    // First 3 pages of the PDF as pictures.
+    private fun pdfPages(uri: Uri): List<String> {
+        val pfd: ParcelFileDescriptor = ctx.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalStateException("cannot open PDF")
+        val renderer = PdfRenderer(pfd)
+        try {
+            val out = ArrayList<String>()
+            for (i in 0 until minOf(renderer.pageCount, 3)) {
+                val page = renderer.openPage(i)
+                val w = 900
+                val h = maxOf(1, (900f * page.height / page.width).toInt())
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                bmp.eraseColor(android.graphics.Color.WHITE)
+                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                page.close()
+                out.add(saveJpeg(bmp, "pdf_$i.jpg"))
+            }
+            return out
+        } finally {
+            try { renderer.close() } catch (_: Throwable) {}
+            try { pfd.close() } catch (_: Throwable) {}
+        }
+    }
+
+    private fun readText(uri: Uri): String {
+        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
+        return String(bytes, Charsets.UTF_8).take(6000)
+    }
+
+    private fun readDocx(uri: Uri): String {
+        ctx.contentResolver.openInputStream(uri)?.use { ins ->
+            val z = ZipInputStream(ins)
+            var e = z.nextEntry
+            while (e != null) {
+                if (e.name == "word/document.xml") {
+                    val xml = String(z.readBytes(), Charsets.UTF_8)
+                    return xml.replace("</w:p>", "\n").replace(Regex("<[^>]+>"), "")
+                        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                        .take(6000)
+                }
+                e = z.nextEntry
+            }
+        }
+        return ""
     }
 
     // Shrinks the picture (faster + less memory), fixes camera rotation, saves it as a small JPEG.
@@ -632,7 +769,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
 
     private fun fileDone(idx: Int, reply: String, name: String, mime: String, bytes: ByteArray) {
         val uri = FileMaker.save(ctx, name, mime, bytes)
-        setMsg(idx, reply, uri.toString(), mime)
+        setMsg(idx, reply, uri.toString(), mime, name)
         speakReady(reply.substringBefore("\n"), true)
     }
 
@@ -640,8 +777,8 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         val ur = lang == "ur"
         fileDone(
             idx,
-            if (ur) "LED بلنکنگ کوڈ کی ZIP فائل تیار ہے۔ اس میں Arduino، ESP32، Raspberry Pi اور Pico کا کوڈ ہے۔ فائل Downloads/NK Voice AI میں محفوظ ہے۔"
-            else "Your LED blinking ZIP is ready. It has code for Arduino, ESP32, Raspberry Pi and Raspberry Pi Pico, plus wiring notes.\nSaved in Downloads/NK Voice AI. Tap Open or Share.",
+            if (ur) "LED بلنکنگ کوڈ کی ZIP فائل تیار ہے۔ اس میں Arduino، ESP32، Raspberry Pi اور Pico کا کوڈ ہے۔ ڈاؤن لوڈ کا بٹن دبائیں۔"
+            else "Your LED blinking ZIP is ready. It has code for Arduino, ESP32, Raspberry Pi and Raspberry Pi Pico, plus wiring notes.\nTap Download to save it in your phone Downloads, or Open / Share.",
             "LED_blinking_code_${FileMaker.stamp()}.zip", "application/zip", FileMaker.ledZip()
         )
     }
@@ -662,7 +799,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
                         "You write short, clear study documents in $langName. Plain text only. " +
                             "Format: first line '# Title'. Then at most 4 sections, each starting with a line '## Heading', " +
                             "followed by 2 to 4 short lines starting with '- ' or one short paragraph. About 250 words in total. " +
-                            "No other markdown, no emojis."
+                            "No other markdown, no emojis, no LaTeX or dollar signs: write maths in plain text like x^2 or 1/2."
                     ),
                     samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.6)
                 )
@@ -684,8 +821,8 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
         val bytes = if (pdf) FileMaker.pdf(title, body) else FileMaker.doc(title, body)
         fileDone(
             idx,
-            (if (lang == "ur") "آپ کی ${if (pdf) "PDF" else "دستاویز"} تیار ہے۔ فائل Downloads/NK Voice AI میں محفوظ ہے۔"
-            else "Your ${if (pdf) "PDF" else "document"} on \"$title\" is ready.\nSaved in Downloads/NK Voice AI. Tap Open or Share."),
+            (if (lang == "ur") "آپ کی ${if (pdf) "PDF" else "دستاویز"} تیار ہے۔ ڈاؤن لوڈ کا بٹن دبائیں۔"
+            else "Your ${if (pdf) "PDF" else "document"} on \"$title\" is ready.\nTap Download to save it in your phone Downloads, or Open / Share."),
             name, if (pdf) "application/pdf" else "application/msword", bytes
         )
     }
@@ -710,7 +847,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
             conversation = c
             val prompt = if (ModelStore.selected(ctx).id.startsWith("qwen3")) "$request /no_think" else request
             setMsg(idx, "Writing your code… this can take a few minutes on a phone.")
-            code = streamAsk(c, Contents.of(prompt), 3500) { t ->
+            code = streamAsk(c, Contents.of(prompt), 3500, false) { t ->
                 val now = SystemClock.uptimeMillis()
                 if (now - lastUi > 600) { lastUi = now; setMsg(idx, "Writing your code… ${t.length} characters so far") }
             }
@@ -722,7 +859,7 @@ class VoiceEngine(private val ctx: Context, private val st: AppState) : Recognit
             fname to clean,
             "README.txt" to "Request: $request\n\nThis code was written by NK Voice AI on your phone. Please read it and test it before using it.\n"
         ))
-        fileDone(idx, "Your code ZIP is ready.\nSaved in Downloads/NK Voice AI. Tap Open or Share.",
+        fileDone(idx, "Your code ZIP is ready.\nTap Download to save it in your phone Downloads, or Open / Share.",
             "code_${FileMaker.stamp()}.zip", "application/zip", bytes)
     }
 

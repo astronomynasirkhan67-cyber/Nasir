@@ -3,6 +3,12 @@ package com.nasir.voicechat
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.widget.Toast
+import androidx.compose.foundation.border
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -53,6 +59,10 @@ class MainActivity : ComponentActivity() {
 
     private val galleryPick = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) engine.askImage(uri, vm.imageQuestion)
+    }
+
+    private val filePick = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) engine.askFile(uri, vm.imageQuestion)
     }
 
     private val cameraShot = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -134,6 +144,23 @@ class MainActivity : ComponentActivity() {
         } catch (e: Throwable) {
             vm.note = "Camera error: ${e.message}"
         }
+    }
+
+    // types: e.g. arrayOf("video/*"), arrayOf("application/pdf"), arrayOf("*/*")
+    fun pickFile(types: Array<String>) {
+        if (vm.responding) return
+        vm.imageQuestion = vm.draft.trim(); vm.draft = ""
+        try { filePick.launch(types) } catch (e: Throwable) { vm.note = "Could not open the file picker: ${e.message}" }
+    }
+
+    fun downloadFile(uri: String, name: String, mime: String) {
+        Thread {
+            val err = FileMaker.exportToDownloads(this, Uri.parse(uri), name, mime)
+            runOnUiThread {
+                vm.note = err ?: "Saved ✓  Downloads/NK Voice AI/$name"
+                Toast.makeText(this, err ?: "Saved in Downloads/NK Voice AI", Toast.LENGTH_LONG).show()
+            }
+        }.start()
     }
 
     fun openFile(uri: String, mime: String) {
@@ -457,7 +484,7 @@ fun ChatScreen(st: AppState, act: MainActivity) {
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "Try: \"make a pdf on Newton's laws\"  •  \"LED blinking code zip\"  •  tap Camera / Gallery for a picture",
+                        "Try: \"make a pdf on Newton's laws\"  •  \"LED blinking code zip\"  •  tap + to send a picture, video, PDF or file",
                         color = Muted, fontSize = 12.sp
                     )
                 }
@@ -479,15 +506,18 @@ fun ChatScreen(st: AppState, act: MainActivity) {
                         )
                     }
                     if (m.fileUri != null) {
-                        Row {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(
                                 onClick = { act.openFile(m.fileUri, m.fileMime ?: "*/*") },
-                                colors = blackButtonColors(), contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp)
+                                colors = blackButtonColors(), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                             ) { Text("Open", fontSize = 13.sp) }
-                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = { act.downloadFile(m.fileUri, m.fileName ?: "file", m.fileMime ?: "*/*") },
+                                colors = blackButtonColors(), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            ) { Text("⬇ Download", fontSize = 13.sp) }
                             OutlinedButton(
                                 onClick = { act.shareFile(m.fileUri, m.fileMime ?: "*/*") },
-                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp)
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                             ) { Text("Share", fontSize = 13.sp) }
                         }
                     }
@@ -501,6 +531,25 @@ fun ChatScreen(st: AppState, act: MainActivity) {
 
         // Input row: text field + (mic when empty, send when typing)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(
+                    onClick = { menu = true }, enabled = !st.responding,
+                    modifier = Modifier.size(48.dp).border(1.dp, Line, CircleShape)
+                ) { Text("+", fontSize = 26.sp, color = Ink) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("📷  Camera") }, onClick = { menu = false; act.openCamera() })
+                    DropdownMenuItem(text = { Text("🖼  Picture from gallery") }, onClick = { menu = false; act.openGallery() })
+                    DropdownMenuItem(text = { Text("🎬  Video") }, onClick = { menu = false; act.pickFile(arrayOf("video/*")) })
+                    DropdownMenuItem(text = { Text("📄  PDF") }, onClick = { menu = false; act.pickFile(arrayOf("application/pdf")) })
+                    DropdownMenuItem(text = { Text("📝  Document (Word / text)") }, onClick = {
+                        menu = false
+                        act.pickFile(arrayOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/*"))
+                    })
+                    DropdownMenuItem(text = { Text("📎  Any file") }, onClick = { menu = false; act.pickFile(arrayOf("*/*")) })
+                }
+            }
+            Spacer(Modifier.width(8.dp))
             OutlinedTextField(
                 value = st.draft, onValueChange = { st.draft = it },
                 modifier = Modifier.weight(1f),
@@ -526,12 +575,6 @@ fun ChatScreen(st: AppState, act: MainActivity) {
                     }
                 }
             }
-        }
-
-        // Picture buttons
-        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LangPill("📷 Camera", false) { act.openCamera() }
-            LangPill("🖼 Gallery", false) { act.openGallery() }
         }
 
         // Options row

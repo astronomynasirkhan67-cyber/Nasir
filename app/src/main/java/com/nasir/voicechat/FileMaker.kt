@@ -62,23 +62,37 @@ object FileMaker {
 
     // ------------------------------------------------------------ save
 
+    // Files are first written to the app's own folder (proper file name for Open / Share).
+    // The Download button copies them to the phone's Downloads folder.
     fun save(ctx: Context, name: String, mime: String, bytes: ByteArray): android.net.Uri {
-        if (Build.VERSION.SDK_INT >= 29) {
-            val v = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, name)
-                put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/NK Voice AI")
-            }
-            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v)
-                ?: throw IOException("Could not create file in Downloads")
-            ctx.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                ?: throw IOException("Could not write file")
-            return uri
-        }
-        val dir = File(ctx.getExternalFilesDir(null), "files").apply { mkdirs() }
+        val dir = File(ctx.filesDir, "generated").apply { mkdirs() }
         val f = File(dir, name)
         f.writeBytes(bytes)
         return FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", f)
+    }
+
+    // Returns null when saved, or an error text.
+    fun exportToDownloads(ctx: Context, src: android.net.Uri, name: String, mime: String): String? {
+        return try {
+            val bytes = ctx.contentResolver.openInputStream(src)?.use { it.readBytes() } ?: return "Could not read the file"
+            if (Build.VERSION.SDK_INT >= 29) {
+                val v = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, name)
+                    put(MediaStore.Downloads.MIME_TYPE, mime)
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/NK Voice AI")
+                }
+                val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v)
+                    ?: return "Could not create the file in Downloads"
+                ctx.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return "Could not write the file"
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "NK Voice AI")
+                dir.mkdirs()
+                File(dir, name).writeBytes(bytes)
+            }
+            null
+        } catch (e: Throwable) {
+            "Download failed: ${e.message}"
+        }
     }
 
     // ------------------------------------------------------------ ZIP

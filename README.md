@@ -25,4 +25,5 @@ Actions tab -> latest run -> Artifacts -> `NKVoiceAI-APK`.
 ## New in this version
 - **Fast replies:** answers appear word by word and are spoken sentence by sentence while the model is still writing. Replies are length-limited. A new small model, **Qwen3 Fast** (about 0.6 GB), answers in seconds. Tap the model name next to "Setup" to switch.
 - **Pictures:** tap Camera or Gallery (type a question first if you want to ask something specific). Needs Gemma 4.
-- **Files:** say or type e.g. "make a pdf on Newton's laws", "make a document on photosynthesis", or "LED blinking code zip". Files are saved in Downloads/NK Voice AI; tap Open or Share.
+- **Files:** say or type e.g. "make a pdf on Newton's laws" or "LED blinking code zip". Tap Open, Download (saves to Downloads/NK Voice AI) or Share.
+- **+ menu:** next to the message box: Camera, Gallery, Video, PDF, Document, Any file. Maths is shown as plain text (x², 1/2).

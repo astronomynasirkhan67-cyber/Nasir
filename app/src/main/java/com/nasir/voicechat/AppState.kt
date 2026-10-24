@@ -7,7 +7,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-data class Msg(val fromUser: Boolean, val text: String, val fileUri: String? = null, val fileMime: String? = null)
+data class Msg(val fromUser: Boolean, val text: String, val fileUri: String? = null, val fileMime: String? = null, val fileName: String? = null)
 
 class AppState {
     val messages = mutableStateListOf<Msg>()
