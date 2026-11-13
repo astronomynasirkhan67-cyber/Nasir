@@ -1,0 +1,6 @@
+# Baseline profile for the app's own code (Compose libraries ship their own profiles).
+# Marks every method of the app as hot, so ART compiles it ahead of time after installation (via the
+# profileinstaller library) instead of interpreting it at first use. Removes the stutter the first time a
+# screen or list is used. Only release builds use it; debug builds are never precompiled.
+HSPLcom/ipvio/stream/**;->**(**)**
+Lcom/ipvio/stream/**;

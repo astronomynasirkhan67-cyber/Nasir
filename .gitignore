@@ -1,5 +1,23 @@
-.gradle/
-build/
-local.properties
+# Build
 *.iml
+.gradle/
+.kotlin/
+build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Android Studio
 .idea/
+.DS_Store
+
+# Local machine and private data – never commit
+local.properties
+secrets.properties
+*.jks
+*.keystore
+keystore.properties
+*.apk
+
+# Full-size screenshot originals (the repository uses the smaller .jpg copies)
+docs/screenshots/*.png

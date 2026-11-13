@@ -1,0 +1,8 @@
+# Only what the project actually uses. Libraries are declared with their version directly in app/build.gradle.kts.
+[versions]
+agp = "9.4.1"
+kotlin = "2.2.10"
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
